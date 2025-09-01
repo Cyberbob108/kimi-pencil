@@ -1,55 +1,90 @@
-# app.py
+# sketch_app.py
 import streamlit as st
 import cv2
 import numpy as np
 from PIL import Image
 import io
 
-st.set_page_config(page_title="Pencil Sketch", layout="centered")
+# ------------------------------------------------------------------
+# 1. Streamlit page configuration
+# ------------------------------------------------------------------
+st.set_page_config(page_title="Realistic Pencil-Sketch Generator",
+                   layout="centered")
+
 st.title("🖼️ → ✏️ Realistic Pencil-Sketch Generator")
-
-@st.cache_data
-def clean_sketch(bgr: np.ndarray, grain_strength: float = 0.05) -> np.ndarray:
-    """
-    Classic dodge-and-burn sketch + optional subtle paper grain.
-    Parameters
-    ----------
-    bgr            : original BGR image
-    grain_strength : 0–0.15, amount of paper texture (0 = none)
-    """
-    gray   = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    smooth = cv2.bilateralFilter(gray, 9, 75, 75)       # edge-preserving
-    inv    = 255 - smooth
-    blur   = cv2.GaussianBlur(inv, (21, 21), 0)
-    sketch = cv2.divide(smooth, 255 - blur, scale=256)
-
-    # add ultra-subtle paper texture
-    if grain_strength > 0:
-        h, w   = sketch.shape
-        paper  = np.random.normal(loc=245, scale=4, size=(h, w)).astype(np.uint8)
-        paper  = cv2.blur(paper, (3, 3))                  # soften grain
-        sketch = cv2.addWeighted(sketch, 1 - grain_strength,
-                                 paper, grain_strength, 0)
-
-    return cv2.cvtColor(sketch, cv2.COLOR_GRAY2RGB)
+st.write("Upload an image and watch it become a hand-drawn-style sketch.")
 
 # ------------------------------------------------------------------
-uploaded = st.file_uploader("Choose an image", type=["jpg", "jpeg", "png"])
-if uploaded:
-    img_rgb = np.array(Image.open(uploaded).convert("RGB"))
-    img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+# 2. Helper: Create the sketch
+# ------------------------------------------------------------------
+def make_pencil_sketch(image_rgb: np.ndarray) -> np.ndarray:
+    """
+    Parameters
+    ----------
+    image_rgb : np.ndarray
+        Input image in RGB channel order (height, width, 3).
 
-    grain = st.sidebar.slider("Subtle paper grain", 0.0, 0.15, 0.05, 0.01)
-    sketch_rgb = clean_sketch(img_bgr, grain)
+    Returns
+    -------
+    np.ndarray
+        Sketch image in RGB channel order, same size as input.
+    """
+    # 2.1 Convert to grayscale
+    gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
 
+    # 2.2 Invert the grayscale image
+    inverted = 255 - gray
+
+    # 2.3 Apply Gaussian blur
+    blurred = cv2.GaussianBlur(inverted, ksize=(21, 21), sigmaX=0, sigmaY=0)
+
+    # 2.4 Color-dodge blending (element-wise)
+    # The dodge formula:  sketch = min(255, (base * 255) / (255 - blend))
+    # Here the "base" is the original grayscale, "blend" is the blurred+inverted.
+    sketch = cv2.divide(gray, 255 - blurred, scale=256)
+
+    # 2.5 Convert single-channel sketch back to 3-channel for display
+    sketch_rgb = cv2.cvtColor(sketch, cv2.COLOR_GRAY2RGB)
+
+    return sketch_rgb
+
+# ------------------------------------------------------------------
+# 3. Streamlit file uploader
+# ------------------------------------------------------------------
+uploaded_file = st.file_uploader("Choose an image (jpg, jpeg, png)",
+                                 type=["jpg", "jpeg", "png"])
+
+if uploaded_file is not None:
+    # Read image bytes -> PIL -> RGB numpy array
+    pil_img = Image.open(uploaded_file).convert("RGB")
+    img_rgb = np.array(pil_img)
+
+    # ------------------------------------------------------------------
+    # 4. Generate sketch
+    # ------------------------------------------------------------------
+    with st.spinner("Sketching..."):
+        sketch_rgb = make_pencil_sketch(img_rgb)
+
+    # ------------------------------------------------------------------
+    # 5. Display side by side
+    # ------------------------------------------------------------------
     col1, col2 = st.columns(2)
-    col1.image(img_rgb,   caption="Original", use_column_width=True)
-    col2.image(sketch_rgb, caption="Clean Sketch", use_column_width=True)
+    with col1:
+        st.subheader("Original")
+        st.image(img_rgb, use_column_width=True)
+    with col2:
+        st.subheader("Pencil Sketch")
+        st.image(sketch_rgb, use_column_width=True)
 
-    # Download
+    # ------------------------------------------------------------------
+    # 6. Optional: Download button
+    # ------------------------------------------------------------------
+    sketch_pil = Image.fromarray(sketch_rgb)
     buf = io.BytesIO()
-    Image.fromarray(sketch_rgb).save(buf, format="PNG")
-    st.download_button("⬇️ Download Sketch",
-                       data=buf.getvalue(),
-                       file_name="sketch.png",
+    sketch_pil.save(buf, format="PNG")
+    byte_im = buf.getvalue()
+
+    st.download_button(label="Download Sketch",
+                       data=byte_im,
+                       file_name="pencil_sketch.png",
                        mime="image/png")
