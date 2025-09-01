@@ -9,38 +9,27 @@ st.set_page_config(page_title="Pencil Sketch", layout="centered")
 st.title("🖼️ → ✏️ Realistic Pencil-Sketch Generator")
 
 @st.cache_data
-def realistic_sketch(bgr: np.ndarray,
-                     shade_scale: float = 1.4,
-                     paper_alpha: float = 0.25) -> np.ndarray:
+def clean_sketch(bgr: np.ndarray, grain_strength: float = 0.05) -> np.ndarray:
     """
-    Create a more realistic pencil/charcoal sketch.
+    Classic dodge-and-burn sketch + optional subtle paper grain.
     Parameters
     ----------
-    bgr         : original BGR image (from PIL → numpy)
-    shade_scale : >1 deepens blacks (graphite look)
-    paper_alpha : 0–1 strength of paper grain overlay
+    bgr            : original BGR image
+    grain_strength : 0–0.15, amount of paper texture (0 = none)
     """
-    h, w = bgr.shape[:2]
+    gray   = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    smooth = cv2.bilateralFilter(gray, 9, 75, 75)       # edge-preserving
+    inv    = 255 - smooth
+    blur   = cv2.GaussianBlur(inv, (21, 21), 0)
+    sketch = cv2.divide(smooth, 255 - blur, scale=256)
 
-    # 1. grayscale
-    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-
-    # 2. edge-preserving smoothing → cleaner shading
-    smooth = cv2.bilateralFilter(gray, 9, 75, 75)
-
-    # 3. classic dodge
-    inverted = 255 - smooth
-    blurred  = cv2.GaussianBlur(inverted, (21, 21), 0)
-    sketch   = cv2.divide(smooth, 255 - blurred, scale=256)
-
-    # 4. deepen blacks
-    sketch = cv2.multiply(sketch, shade_scale)
-    sketch = np.clip(sketch, 0, 255).astype(np.uint8)
-
-    # 5. procedural paper texture
-    paper = np.random.normal(loc=245, scale=6, size=(h, w)).astype(np.uint8)
-    paper = cv2.bilateralFilter(paper, 5, 25, 25)  # soften
-    sketch = cv2.addWeighted(sketch, 1 - paper_alpha, paper, paper_alpha, 0)
+    # add ultra-subtle paper texture
+    if grain_strength > 0:
+        h, w   = sketch.shape
+        paper  = np.random.normal(loc=245, scale=4, size=(h, w)).astype(np.uint8)
+        paper  = cv2.blur(paper, (3, 3))                  # soften grain
+        sketch = cv2.addWeighted(sketch, 1 - grain_strength,
+                                 paper, grain_strength, 0)
 
     return cv2.cvtColor(sketch, cv2.COLOR_GRAY2RGB)
 
@@ -50,17 +39,14 @@ if uploaded:
     img_rgb = np.array(Image.open(uploaded).convert("RGB"))
     img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
 
-    # UI knobs
-    shade = st.sidebar.slider("Shade intensity", 1.0, 2.0, 1.4, 0.05)
-    grain = st.sidebar.slider("Paper texture", 0.0, 0.5, 0.25, 0.05)
-
-    sketch_rgb = realistic_sketch(img_bgr, shade, grain)
+    grain = st.sidebar.slider("Subtle paper grain", 0.0, 0.15, 0.05, 0.01)
+    sketch_rgb = clean_sketch(img_bgr, grain)
 
     col1, col2 = st.columns(2)
-    col1.image(img_rgb,  caption="Original", use_column_width=True)
-    col2.image(sketch_rgb, caption="Realistic Sketch", use_column_width=True)
+    col1.image(img_rgb,   caption="Original", use_column_width=True)
+    col2.image(sketch_rgb, caption="Clean Sketch", use_column_width=True)
 
-    # Download button
+    # Download
     buf = io.BytesIO()
     Image.fromarray(sketch_rgb).save(buf, format="PNG")
     st.download_button("⬇️ Download Sketch",
